@@ -4,8 +4,8 @@ use if_chain::if_chain;
 use crate::syntax::ast;
 use crate::syntax::source_map::Span;
 use crate::syntax::visit::FnKind;
+use crate::syntax_pos::BytePos;
 use crate::rustc_errors::Applicability;
-
 use crate::utils::{in_macro, match_path_ast, snippet_opt, span_lint_and_then, span_note_and_lint};
 
 /// **What it does:** Checks for return statements at the end of a block.
@@ -56,6 +56,24 @@ declare_clippy_lint! {
     style,
     "creating a let-binding and then immediately returning it like `let x = expr; x` at \
      the end of a block"
+}
+
+/// **What it does:** Checks for unit (`()`) expressions that can be removed
+///
+/// **Why is this bad?** Such expressions add no value, but can make the code
+/// less readable. Depending on formatting they can make a `break` or `return`
+/// statement look like a function call.
+///
+/// **Known problems:** None.
+///
+/// **Example:**
+/// ```rust
+/// fn return_unit() -> () { () }
+/// ```
+declare_clippy_lint! {
+    pub UNUSED_UNIT,
+    style,
+    "needless unit expression"
 }
 
 #[derive(Copy, Clone)]
@@ -148,6 +166,56 @@ impl ReturnPass {
             }
         }
     }
+
+    // get the def site
+    fn get_def(&self, span: Span) -> Option<Span> {
+        span.ctxt().outer().expn_info().and_then(|info| info.def_site)
+    }
+
+    // is this expr a `()` unit?
+    fn is_unit_expr(&self, expr: &ast::Expr) -> bool {
+        if let ast::ExprKind::Tup(ref vals) = expr.node {
+            vals.is_empty()
+        } else {
+            false
+        }
+    }
+
+    fn check_fn_ty(&mut self, cx: &EarlyContext<'_>, ty: &ast::Ty, span: Span) {
+        if_chain! {
+            if let ast::TyKind::Tup(ref vals) = ty.node;
+            if vals.is_empty() && !in_macro(ty.span) &&
+                    self.get_def(span) == self.get_def(ty.span);
+            then {
+                let (rspan, appl) = if let Ok(fn_source) =
+                        cx.sess().source_map()
+                                 .span_to_snippet(span.with_hi(ty.span.hi())) {
+                    if let Some(rpos) = fn_source.rfind("->") {
+                        (ty.span.with_lo(BytePos(span.lo().0 + rpos as u32)),
+                            Applicability::MachineApplicable)
+                    } else {
+                        (ty.span, Applicability::MaybeIncorrect)
+                    }
+                } else {
+                    (ty.span, Applicability::MaybeIncorrect)
+                };
+                span_lint_and_then(cx, UNUSED_UNIT, rspan, "unneeded unit return type", |db| {
+                    db.span_suggestion_with_applicability(
+                        rspan,
+                        "remove the `-> ()`",
+                        String::new(),
+                        appl,
+                    );
+                });
+            }
+        }
+    }
+
+    fn check_decl(&mut self, cx: &EarlyContext<'_>, decl: &ast::FnDecl, span: Span) {
+        if let ast::FunctionRetTy::Ty(ref ty) = decl.output {
+            self.check_fn_ty(cx, ty, span);
+        }
+    }
 }
 
 impl LintPass for ReturnPass {
@@ -157,15 +225,74 @@ impl LintPass for ReturnPass {
 }
 
 impl EarlyLintPass for ReturnPass {
-    fn check_fn(&mut self, cx: &EarlyContext<'_>, kind: FnKind<'_>, _: &ast::FnDecl, _: Span, _: ast::NodeId) {
+    fn check_fn(&mut self, cx: &EarlyContext<'_>, kind: FnKind<'_>, decl: &ast::FnDecl, span: Span, _: ast::NodeId) {
         match kind {
             FnKind::ItemFn(.., block) | FnKind::Method(.., block) => self.check_block_return(cx, block),
             FnKind::Closure(body) => self.check_final_expr(cx, body, Some(body.span)),
         }
+        self.check_decl(cx, decl, span);
     }
 
     fn check_block(&mut self, cx: &EarlyContext<'_>, block: &ast::Block) {
         self.check_let_return(cx, block);
+        if_chain! {
+            if let Some(ref stmt) = block.stmts.last();
+            if let ast::StmtKind::Expr(ref expr) = stmt.node;
+            if self.is_unit_expr(expr);
+            if !in_macro(expr.span);
+            then {
+                let sp = expr.span;
+                span_lint_and_then(cx, UNUSED_UNIT, sp, "unneeded unit expression", |db| {
+                    db.span_suggestion_with_applicability(
+                        sp,
+                        "remove the final `()`",
+                        String::new(),
+                        Applicability::MachineApplicable,
+                    );
+                });
+            }
+        }
+    }
+
+    fn check_expr(&mut self, cx: &EarlyContext<'_>, e: &ast::Expr) {
+        match e.node {
+            ast::ExprKind::Ret(Some(ref expr)) | ast::ExprKind::Break(_, Some(ref expr)) => {
+                if self.is_unit_expr(expr) && !in_macro(expr.span) {
+                    span_lint_and_then(cx, UNUSED_UNIT, expr.span, "unneeded `()`", |db| {
+                        db.span_suggestion_with_applicability(
+                            expr.span,
+                            "remove the `()`",
+                            String::new(),
+                            Applicability::MachineApplicable,
+                        );
+                    });
+                }
+            }
+            _ => ()
+        }
+    }
+
+    fn check_ty(&mut self, cx: &EarlyContext<'_>, ty: &ast::Ty) {
+        match ty.node {
+            ast::TyKind::BareFn(ref bare_fn_ty) => {
+                self.check_decl(cx, &bare_fn_ty.decl, ty.span);
+            }
+            _ => ()
+        }
+    }
+
+    fn check_path(&mut self, cx: &EarlyContext<'_>, path: &ast::Path, _: ast::NodeId) {
+        if_chain!{
+            if path.segments.len() == 1;
+            if let Some(ref segment) = path.segments.first();
+            if ["Fn", "FnMut", "FnOnce"].contains(&&*segment.ident.as_str());
+            if let Some(ref args) = segment.args;
+            if let ast::GenericArgs::Parenthesized(ref par_args) = &**args;
+            if let Some(ref ty) = par_args.output;
+            then {
+                self.check_fn_ty(cx, ty, par_args.span);
+            }
+        }
     }
 }
 

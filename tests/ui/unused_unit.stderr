@@ -1,0 +1,78 @@
+error: unneeded unit return type
+  --> $DIR/unused_unit.rs:28:29
+   |
+28 |     pub fn get_unit<F: Fn() -> (), G>(&self, f: F, _g: G) ->
+   |                             ^^^^^ help: remove the `-> ()`
+   |
+   = note: `-D clippy::unused-unit` implied by `-D warnings`
+
+error: unneeded unit return type
+  --> $DIR/unused_unit.rs:30:19
+   |
+30 |     where G: Fn() -> () {
+   |                   ^^^^^ help: remove the `-> ()`
+
+error: unneeded unit return type
+  --> $DIR/unused_unit.rs:28:59
+   |
+28 |       pub fn get_unit<F: Fn() -> (), G>(&self, f: F, _g: G) ->
+   |  ___________________________________________________________^
+29 | |         ()
+   | |__________^ help: remove the `-> ()`
+
+error: unneeded unit return type
+  --> $DIR/unused_unit.rs:31:23
+   |
+31 |         let _y: &Fn() -> () = &f;
+   |                       ^^^^^ help: remove the `-> ()`
+
+error: unneeded unit return type
+  --> $DIR/unused_unit.rs:37:19
+   |
+37 |     fn into(self) -> () {
+   |                   ^^^^^ help: remove the `-> ()`
+
+error: unneeded unit expression
+  --> $DIR/unused_unit.rs:38:9
+   |
+38 |         ()
+   |         ^^ help: remove the final `()`
+
+error: unneeded unit return type
+  --> $DIR/unused_unit.rs:42:18
+   |
+42 | fn return_unit() -> () { () }
+   |                  ^^^^^ help: remove the `-> ()`
+
+error: unneeded unit expression
+  --> $DIR/unused_unit.rs:42:26
+   |
+42 | fn return_unit() -> () { () }
+   |                          ^^ help: remove the final `()`
+
+error: unneeded unit return type
+  --> $DIR/unused_unit.rs:46:18
+   |
+46 |     let _x: fn() -> () = return_unit;
+   |                  ^^^^^ help: remove the `-> ()`
+
+error: unneeded unit return type
+  --> $DIR/unused_unit.rs:47:24
+   |
+47 |     let y: Option<fn() -> ()> = None;
+   |                        ^^^^^ help: remove the `-> ()`
+
+error: unneeded `()`
+  --> $DIR/unused_unit.rs:51:14
+   |
+51 |         break();
+   |              ^^ help: remove the `()`
+
+error: unneeded `()`
+  --> $DIR/unused_unit.rs:53:11
+   |
+53 |     return();
+   |           ^^ help: remove the `()`
+
+error: aborting due to 12 previous errors
+
